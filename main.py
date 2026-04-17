@@ -1,23 +1,24 @@
 import asyncio
+from chat import connect_to_chat, read_messages
+from logger import ChatLogger
+
+HOST = "minechat.dvmn.org"
+PORT = 5000
 
 
 async def main():
-    reader, writer = await asyncio.open_connection("minechat.dvmn.org", 5000)
-    print("Подключено к чату. Вывод переписки:")
+    logger = ChatLogger("chat_history.log")
+    await logger.log_message("Установлено соединение")
 
     try:
-        while True:
-            data = await reader.readline()
-
-            if not data:
-                break
-
-            message = data.decode().strip()
-            print(message)
-
+        reader, writer = await connect_to_chat(HOST, PORT)
+        await read_messages(reader, logger.log_message)
+    except (ConnectionError, OSError, asyncio.IncompleteReadError) as e:
+        print(f"Ошибка: {e}. Попробуйте перезапустить.")
     finally:
-        writer.close()
-        await writer.wait_closed()
+        if "writer" in locals():
+            writer.close()
+            await writer.wait_closed()
 
 
 if __name__ == "__main__":
