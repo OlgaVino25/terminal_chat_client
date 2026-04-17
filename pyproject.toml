@@ -6,4 +6,5 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiofiles>=25.1.0",
+    "configargparse>=1.7.5",
 ]

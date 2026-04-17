@@ -15,6 +15,9 @@ history.log
 chat_history.txt
 *.log
 
+# Файлы конфигурации с пользовательскими данными
+settings.ini
+
 # Редакторы и IDE
 .vscode/
 .idea/
