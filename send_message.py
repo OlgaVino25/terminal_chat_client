@@ -74,6 +74,11 @@ async def send_messages(host, port, token, initial_message):
             logger.error(f"Ошибка разбора JSON: {e}")
             print("Ошибка: сервер вернул не JSON. Возможно, токен неверен.")
             return
+        
+        if response is None:
+            logger.error("Невалидный токен: сервер вернул null")
+            print("Неизвестный токен. Проверьте его или зарегистрируйте заново.")
+            return
 
         welcome_line = await reader.readline()
         welcome_text = welcome_line.decode().strip()
