@@ -2,6 +2,11 @@ import asyncio
 import configargparse
 import sys
 import json
+import logging
+
+
+logging.basicConfig(level=logging.DEBUG, format="DEBUG:sender:%(message)s")
+logger = logging.getLogger("sender")
 
 
 def parse_args():
@@ -47,34 +52,45 @@ async def send_messages(host, port, token, initial_message):
 
     try:
         greeting = await reader.readline()
-        print("[Сервер]", greeting.decode().strip())
+        greeting_text = greeting.decode().strip()
+        logger.debug(greeting_text)
 
+        logger.debug(f"Отправка токена: {token}")
         writer.write((token + "\n").encode())
         await writer.drain()
 
         response_line = await reader.readline()
 
         if not response_line:
-            print("Сервер не ответил на токен.")
+            logger.error("Сервер не ответил на токен.")
             return
 
-        response = json.loads(response_line.decode().strip())
-        print(
-            f"[Авторизация] Ник: {response['nickname']}, Хэш: {response['account_hash']}"
-        )
+        response_text = response_line.decode().strip()
+        logger.debug(response_text)
+
+        try:
+            response = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка разбора JSON: {e}")
+            print("Ошибка: сервер вернул не JSON. Возможно, токен неверен.")
+            return
 
         welcome_line = await reader.readline()
-        print("[Сервер]", welcome_line.decode().strip())
+        welcome_text = welcome_line.decode().strip()
+        logger.debug(welcome_text)
 
         if initial_message:
+            logger.debug(f"Отправка начального сообщения: {initial_message}")
             writer.write((initial_message + "\n\n").encode())
             await writer.drain()
             ack = await reader.readline()
             if ack:
-                print("[Сервер]", ack.decode().strip())
+                ack_text = ack.decode().strip()
+                logger.debug(ack_text)
 
         print("Вводите сообщения. Для выхода введите /exit или нажмите Ctrl+C.")
         loop = asyncio.get_event_loop()
+
         while True:
             user_input = await loop.run_in_executor(None, sys.stdin.readline)
             if not user_input:
@@ -85,24 +101,26 @@ async def send_messages(host, port, token, initial_message):
             if not user_input:
                 continue
 
+            logger.debug(f"Отправка сообщения: {user_input}")
             writer.write((user_input + "\n\n").encode())
             await writer.drain()
 
             ack = await reader.readline()
             if ack:
-                print("[Сервер]", ack.decode().strip())
+                ack_text = ack.decode().strip()
+                logger.debug(ack_text)
             else:
-                print("Сервер не подтвердил отправку.")
+                logger.warning("Сервер не подтвердил отправку.")
                 break
 
     except (asyncio.CancelledError, KeyboardInterrupt):
-        print("\nЗавершение работы...")
-    except json.JSONDecodeError:
-        print("Ошибка: сервер вернул не JSON. Возможно, токен неверен.")
+        logger.info("Завершение работы по запросу пользователя.")
+    except Exception as e:
+        logger.exception(f"Неожиданная ошибка: {e}")
     finally:
         writer.close()
         await writer.wait_closed()
-        print("Соединение закрыто.")
+        logger.debug("Соединение закрыто.")
 
 
 async def main():
