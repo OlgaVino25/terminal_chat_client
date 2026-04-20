@@ -4,13 +4,10 @@ import configargparse
 from chat import connect_to_chat, read_messages
 from logger import ChatLogger
 
-HOST = "minechat.dvmn.org"
-PORT = 5000
-
 
 def parse_args():
     parser = configargparse.ArgParser(
-        default_config_files=["settings.ini"],
+        default_config_files=["settings_read.ini"],
         description="Клиент для чата Minecraft.",
     )
 

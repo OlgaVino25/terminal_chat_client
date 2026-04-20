@@ -16,7 +16,8 @@ chat_history.txt
 *.log
 
 # Файлы конфигурации с пользовательскими данными
-settings.ini
+settings_read.ini
+settings_send.ini
 
 # Редакторы и IDE
 .vscode/
