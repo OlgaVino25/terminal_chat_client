@@ -3,20 +3,24 @@ import configargparse
 import json
 import logging
 import sys
+import os
+
+from src.api import connect
+from src.paths import REG_CONFIG_PATH, TOKEN_FILE_PATH
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger("register")
 
 
 def parse_args():
-    parser = configargparse.ArgParser(default_config_files=["settings_reg.ini"])
+    parser = configargparse.ArgParser(default_config_files=[REG_CONFIG_PATH])
     parser.add_argument(
         "-c", "--config", is_config_file=True, help="Путь к файлу конфигурации"
     )
     parser.add_argument("--host", help="Хост чат-сервера", default="minechat.dvmn.org")
     parser.add_argument("--port", type=int, help="Порт для регистрации", default=5050)
     parser.add_argument(
-        "--output", help="Файл для сохранения токена", default="token.txt"
+        "--output", help="Файл для сохранения токена", default=TOKEN_FILE_PATH
     )
     parser.add_argument(
         "--nickname", help="Никнейм (если не указан, будет запрошен)", default=None
@@ -26,7 +30,7 @@ def parse_args():
 
 
 async def register(host, port, output_file, nickname):
-    reader, writer = await asyncio.open_connection(host, port)
+    reader, writer = await connect(host, port)
     try:
         greeting = await reader.readline()
         logger.info(greeting.decode().strip())
@@ -78,6 +82,7 @@ async def register(host, port, output_file, nickname):
             logger.error("Токен не получен")
             return
 
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         with open(output_file, "w") as f:
             f.write(account_hash)
 

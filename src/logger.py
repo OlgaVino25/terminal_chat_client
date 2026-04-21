@@ -1,5 +1,5 @@
-import datetime
 import aiofiles
+import datetime
 
 
 class ChatLogger:

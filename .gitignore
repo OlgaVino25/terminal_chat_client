@@ -19,6 +19,9 @@ chat_history.txt
 settings_read.ini
 settings_send.ini
 settings_reg.ini
+token.txt
+
+!data/.gitkeep
 
 # Редакторы и IDE
 .vscode/
