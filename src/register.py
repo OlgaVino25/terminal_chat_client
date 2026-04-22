@@ -1,3 +1,11 @@
+"""Регистрация нового пользователя в чате.
+
+Примеры:
+  python -m src.register --nickname "MyNick"
+  python -m src.register --username "MyNick"   # то же самое
+  python -m src.register  # будет запрошен ник в интерактивном режиме
+"""
+
 import asyncio
 import configargparse
 import json
@@ -13,20 +21,26 @@ logger = logging.getLogger("register")
 
 
 def parse_args():
-    parser = configargparse.ArgParser(default_config_files=[REG_CONFIG_PATH])
+    parser = configargparse.ArgParser(
+        default_config_files=[REG_CONFIG_PATH],
+        description="Регистрация нового пользователя в чате",
+    )
     parser.add_argument(
         "-c", "--config", is_config_file=True, help="Путь к файлу конфигурации"
     )
-    parser.add_argument("--host", help="Хост чат-сервера", default="minechat.dvmn.org")
-    parser.add_argument("--port", type=int, help="Порт для регистрации", default=5050)
+    parser.add_argument("--host", default="minechat.dvmn.org", help="Хост чат-сервера")
+    parser.add_argument("--port", type=int, default=5050, help="Порт для регистрации")
     parser.add_argument(
-        "--output", help="Файл для сохранения токена", default=TOKEN_FILE_PATH
+        "--output", default=TOKEN_FILE_PATH, help="Файл для сохранения токена"
     )
     parser.add_argument(
-        "--nickname", help="Никнейм (если не указан, будет запрошен)", default=None
+        "--nickname",
+        "--username",
+        dest="nickname",
+        default=None,
+        help="Никнейм (если не указан, будет запрошен)",
     )
-    args = parser.parse_args()
-    return args.host, args.port, args.output, args.nickname
+    return parser.parse_args()
 
 
 async def register(host, port, output_file, nickname):
@@ -101,8 +115,8 @@ async def register(host, port, output_file, nickname):
 
 
 async def main():
-    host, port, output, nickname = parse_args()
-    await register(host, port, output, nickname)
+    args = parse_args()
+    await register(args.host, args.port, args.output, args.nickname)
 
 
 if __name__ == "__main__":
