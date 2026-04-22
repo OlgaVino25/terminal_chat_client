@@ -5,7 +5,7 @@ import logging
 import sys
 import os
 
-from src.api import connect
+from src.api import connect, sanitize_text
 from src.paths import REG_CONFIG_PATH, TOKEN_FILE_PATH
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -56,6 +56,7 @@ async def register(host, port, output_file, nickname):
                     nickname = "Anonymous_" + str(hash(str(host)))
                     print(f"Используем автоматический ник: {nickname}")
 
+            nickname = sanitize_text(nickname)
             writer.write((nickname + "\n").encode())
             await writer.drain()
 

@@ -3,7 +3,13 @@ import configargparse
 import sys
 import logging
 
-from src.api import connect, read_until_greeting, authorise, submit_message
+from src.api import (
+    connect,
+    read_until_greeting,
+    authorise,
+    submit_message,
+    sanitize_text,
+)
 from src.paths import SEND_CONFIG_PATH
 
 logging.basicConfig(level=logging.DEBUG, format="DEBUG:sender:%(message)s")
@@ -43,6 +49,7 @@ async def main_loop(host, port, token, initial_message):
 
         print("Вводите сообщения. Для выхода введите /exit или Ctrl+C.")
         loop = asyncio.get_event_loop()
+
         while True:
             user_input = await loop.run_in_executor(None, sys.stdin.readline)
             if not user_input:
@@ -53,7 +60,9 @@ async def main_loop(host, port, token, initial_message):
             if not user_input:
                 continue
 
-            if await submit_message(reader, writer, user_input):
+            clean_input = sanitize_text(user_input)
+
+            if await submit_message(reader, writer, clean_input):
                 print("Сообщение отправлено.")
             else:
                 break

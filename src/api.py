@@ -1,9 +1,15 @@
 import asyncio
 import json
 import logging
+import re
 
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_text(text):
+    """Заменяет управляющие символы (\\n, \\r) на пробелы, чтобы не ломать протокол."""
+    return re.sub(r"[\n\r]+", " ", text)
 
 
 async def connect(host, port):
@@ -18,12 +24,12 @@ async def read_until_greeting(reader):
 
 
 async def authorise(reader, writer, token):
-    """
-    Отправляет токен, читает ответ.
+    """Отправляет токен, читает ответ.
     Возвращает словарь с данными пользователя (nickname, account_hash)
     или None, если токен невалиден.
     """
-    writer.write((token + "\n").encode())
+    clean_token = sanitize_text(token)
+    writer.write((clean_token + "\n").encode())
     await writer.drain()
 
     response_line = await reader.readline()
@@ -48,11 +54,11 @@ async def authorise(reader, writer, token):
 
 
 async def submit_message(reader, writer, message):
-    """
-    Отправляет одно сообщение (с завершающей пустой строкой).
+    """Отправляет одно сообщение (с завершающей пустой строкой).
     Возвращает True, если сервер подтвердил отправку, иначе False.
     """
-    writer.write((message + "\n\n").encode())
+    clean_message = sanitize_text(message)
+    writer.write((clean_message + "\n\n").encode())
     await writer.drain()
 
     ack = await reader.readline()
