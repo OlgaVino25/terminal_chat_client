@@ -1,0 +1,3 @@
+host = your_host
+port_read = your_port
+port_send = your_port

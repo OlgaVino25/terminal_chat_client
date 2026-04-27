@@ -19,6 +19,7 @@ chat_history.txt
 config/send.ini
 config/reg.ini
 config/read.ini
+config/gui.ini
 
 !config/*.example
 token.txt
