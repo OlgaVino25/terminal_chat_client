@@ -38,3 +38,8 @@ Thumbs.db
 # Файлы запуска/отладки
 *.pid
 *.lock
+
+# Игнорировать кэш-директории линтеров
+.mypy_cache/
+.ruff_cache/
+.pytype/

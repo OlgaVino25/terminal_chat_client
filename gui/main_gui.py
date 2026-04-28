@@ -5,8 +5,13 @@ import datetime
 import aiofiles
 import os
 
-from src.api import connect
-from gui.interface import ReadConnectionStateChanged, draw
+from src.api import connect, authorise, read_until_greeting, submit_message
+from gui.interface import (
+    ReadConnectionStateChanged,
+    SendingConnectionStateChanged,
+    NicknameReceived,
+    draw,
+)
 from src.paths import GUI_CONFIG_PATH, TOKEN_FILE_PATH, HISTORY_LOG_PATH
 
 
@@ -54,6 +59,41 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def get_token(args_token):
+    if args_token:
+        return args_token
+
+    try:
+        with open(TOKEN_FILE_PATH, "r") as f:
+            token = f.read().strip()
+
+            if token:
+                return token
+
+    except FileNotFoundError:
+        pass
+
+    return None
+
+
+async def authorize_and_get_nickname(host, port, token):
+    """Подключается к серверу, отправляет токен и возвращает ник пользователя."""
+    reader, writer = await connect(host, port)
+
+    try:
+        await read_until_greeting(reader)
+
+        user_data = await authorise(reader, writer, token)
+
+        if user_data is None:
+            raise ValueError("Неверный токен")
+        return user_data.get("nickname", "Unknown")
+    
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 async def save_messages_task(filepath, save_queue):
@@ -130,8 +170,50 @@ async def read_messages_task(
                 await writer.wait_closed()
 
 
+async def process_sending_task(sending_queue, host, port, token):
+    """Читает сообщения из очереди и отправляет их на сервер."""
+    while True:
+        message = await sending_queue.get()
+        logger.info(f"Отправка сообщения: {message}")
+        reader = writer =None
+
+        try:
+            reader, writer = await connect(host, port)
+            await read_until_greeting(reader)
+
+            user_data = await authorise(reader, writer, token)
+            if user_data is None:
+                logger.error("Не удалось авторизоваться для отправки")
+                continue
+            success = await submit_message(reader, writer, message)
+            if success:
+                logger.debug("Сообщение успешно отправлено")
+            else:
+                logger.error("Сервер не подтвердил отправку")
+        except Exception as e:
+            logger.exception(f"Ошибка при отправке: {e}")
+        finally:
+            if writer:
+                writer.close()
+                await writer.wait_closed()
+
+
 async def main():
     args = parse_args()
+
+    token = get_token(args.token)
+    if not token:
+        print(
+            "Токен не найден. Сначала зарегистрируйтесь командой: python -m src.register --nickname ВашНик"
+        )
+        return
+
+    try:
+        nickname = await authorize_and_get_nickname(args.host, args.port_send, token)
+        print(f"Выполнена авторизация. Пользователь {nickname}.")
+    except Exception as e:
+        print(f"Ошибка авторизации: {e}. Проверьте токен.")
+        return
 
     messages_queue = asyncio.Queue()
     sending_queue = asyncio.Queue()
@@ -143,12 +225,15 @@ async def main():
     for msg in history:
         await messages_queue.put(msg)
 
+    status_updates_queue.put_nowait(NicknameReceived(nickname))
+
     await asyncio.gather(
         draw(messages_queue, sending_queue, status_updates_queue),
         read_messages_task(
             args.host, args.port_read, messages_queue, save_queue, status_updates_queue
         ),
         save_messages_task(args.history, save_queue),
+        process_sending_task(sending_queue, args.host, args.port_send, token),
     )
 
 
