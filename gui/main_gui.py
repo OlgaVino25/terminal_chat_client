@@ -4,6 +4,8 @@ import logging
 import datetime
 import aiofiles
 import os
+import tkinter as tk
+from tkinter import messagebox
 
 from src.api import connect, authorise, read_until_greeting, submit_message
 from gui.interface import (
@@ -14,9 +16,14 @@ from gui.interface import (
 )
 from src.paths import GUI_CONFIG_PATH, TOKEN_FILE_PATH, HISTORY_LOG_PATH
 
-
 logging.basicConfig(level=logging.DEBUG, format="DEBUG:%(message)s")
 logger = logging.getLogger(__name__)
+
+
+class InvalidToken(Exception):
+    """Неверный токен авторизации."""
+
+    pass
 
 
 def parse_args():
@@ -62,6 +69,10 @@ def parse_args():
 
 
 def get_token(args_token):
+    """Возвращает токен из аргументов командной строки,
+    либо из файла TOKEN_FILE_PATH, если аргумент не задан.
+    """
+
     if args_token:
         return args_token
 
@@ -78,19 +89,31 @@ def get_token(args_token):
     return None
 
 
-async def authorize_and_get_nickname(host, port, token):
-    """Подключается к серверу, отправляет токен и возвращает ник пользователя."""
+async def create_authorized_connection(host, port, token):
+    """Устанавливает соединение с сервером, выполняет авторизацию по токену.
+    Возвращает кортеж (reader, writer, user_data).
+    При ошибке закрывает соединение и поднимает исключение.
+    """
     reader, writer = await connect(host, port)
-
     try:
         await read_until_greeting(reader)
-
         user_data = await authorise(reader, writer, token)
-
         if user_data is None:
-            raise ValueError("Неверный токен")
+            raise InvalidToken("Неверный токен")
+        return reader, writer, user_data
+    except Exception:
+        writer.close()
+        await writer.wait_closed()
+        raise
+
+
+async def authorize_and_get_nickname(host, port, token):
+    """Возвращает никнейм пользователя после успешной авторизации.
+    Использует create_authorized_connection и закрывает соединение.
+    """
+    reader, writer, user_data = await create_authorized_connection(host, port, token)
+    try:
         return user_data.get("nickname", "Unknown")
-    
     finally:
         writer.close()
         await writer.wait_closed()
@@ -170,32 +193,40 @@ async def read_messages_task(
                 await writer.wait_closed()
 
 
-async def process_sending_task(sending_queue, host, port, token):
-    """Читает сообщения из очереди и отправляет их на сервер."""
+async def process_sending_task(sending_queue, host, port, token, status_updates_queue):
+    """Читает сообщения из очереди и отправляет их на сервер.
+    Обновляет статус отправки.
+    """
     while True:
         message = await sending_queue.get()
         logger.info(f"Отправка сообщения: {message}")
-        reader = writer =None
-
+        reader = writer = None
+        status_updates_queue.put_nowait(SendingConnectionStateChanged.INITIATED)
         try:
-            reader, writer = await connect(host, port)
-            await read_until_greeting(reader)
-
-            user_data = await authorise(reader, writer, token)
-            if user_data is None:
-                logger.error("Не удалось авторизоваться для отправки")
-                continue
+            reader, writer, user_data = await create_authorized_connection(
+                host, port, token
+            )
+            status_updates_queue.put_nowait(SendingConnectionStateChanged.ESTABLISHED)
+            logger.debug(f"Авторизован как {user_data.get('nickname')}")
             success = await submit_message(reader, writer, message)
             if success:
                 logger.debug("Сообщение успешно отправлено")
             else:
                 logger.error("Сервер не подтвердил отправку")
+        except InvalidToken as e:
+            logger.error(f"Ошибка авторизации при отправке: {e}")
+            status_updates_queue.put_nowait(SendingConnectionStateChanged.CLOSED)
+        except (ConnectionError, OSError, asyncio.IncompleteReadError) as e:
+            logger.error(f"Сетевая ошибка при отправке: {e}")
+            status_updates_queue.put_nowait(SendingConnectionStateChanged.CLOSED)
         except Exception as e:
-            logger.exception(f"Ошибка при отправке: {e}")
+            logger.exception(f"Неожиданная ошибка при отправке: {e}")
+            status_updates_queue.put_nowait(SendingConnectionStateChanged.CLOSED)
         finally:
             if writer:
                 writer.close()
                 await writer.wait_closed()
+                status_updates_queue.put_nowait(SendingConnectionStateChanged.CLOSED)
 
 
 async def main():
@@ -203,16 +234,24 @@ async def main():
 
     token = get_token(args.token)
     if not token:
-        print(
-            "Токен не найден. Сначала зарегистрируйтесь командой: python -m src.register --nickname ВашНик"
+        messagebox.showerror(
+            "Ошибка",
+            "Токен не найден.\nСначала зарегистрируйтесь:\npython -m src.register --nickname ВашНик",
         )
         return
 
     try:
         nickname = await authorize_and_get_nickname(args.host, args.port_send, token)
         print(f"Выполнена авторизация. Пользователь {nickname}.")
+    except InvalidToken as e:
+        messagebox.showerror(
+            "Ошибка авторизации",
+            f"Неверный токен.\nПроверьте его или зарегистрируйтесь заново.\n{e}",
+        )
+        return
+
     except Exception as e:
-        print(f"Ошибка авторизации: {e}. Проверьте токен.")
+        messagebox.showerror("Ошибка", f"Не удалось подключиться к серверу: {e}")
         return
 
     messages_queue = asyncio.Queue()
@@ -233,7 +272,9 @@ async def main():
             args.host, args.port_read, messages_queue, save_queue, status_updates_queue
         ),
         save_messages_task(args.history, save_queue),
-        process_sending_task(sending_queue, args.host, args.port_send, token),
+        process_sending_task(
+            sending_queue, args.host, args.port_send, token, status_updates_queue
+        ),
     )
 
 
