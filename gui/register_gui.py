@@ -16,14 +16,20 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("register_gui")
 
+WINDOW_WIDTH = 400
+WINDOW_HEIGHT = 250
+CLOSE_AFTER_SUCCESS_MS = 2000
+
 
 class RegistrationApp:
     def __init__(self, root, host, port):
+        """Инициализирует окно регистрации, запоминает хост и порт сервера."""
+
         self.root = root
         self.host = host
         self.port = port
         self.root.title("Регистрация в чате Minecraft")
-        self.root.geometry("400x250")
+        self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.root.resizable(False, False)
 
         self.nickname_var = tk.StringVar()
@@ -46,6 +52,8 @@ class RegistrationApp:
         root.geometry(f"+{x}+{y}")
 
     def register(self):
+        """Обработчик нажатия кнопки. Запускает асинхронную регистрацию."""
+
         nickname = self.nickname_var.get().strip()
         if not nickname:
             messagebox.showerror("Ошибка", "Никнейм не может быть пустым")
@@ -58,6 +66,9 @@ class RegistrationApp:
         self.register_btn.config(state="disabled")
 
     async def async_register(self, nickname):
+        """Асинхронно регистрирует пользователя на сервере и сохраняет токен."""
+
+        reader = writer = None
         try:
             reader, writer = await connect(self.host, self.port)
             greeting = await read_until_greeting(reader)
@@ -68,22 +79,22 @@ class RegistrationApp:
 
             line = await reader.readline()
             if not line:
-                raise Exception("Сервер не ответил")
+                raise ConnectionError("Сервер не ответил")
             response_text = line.decode().strip()
             logger.debug(response_text)
             if "preferred nickname" not in response_text.lower():
-                raise Exception("Сервер не ожидает ник")
+                raise ConnectionError("Сервер не ожидает ник")
 
             writer.write((nickname + "\n").encode())
             await writer.drain()
 
             json_line = await reader.readline()
             if not json_line:
-                raise Exception("Сервер не вернул токен")
+                raise ConnectionError("Сервер не вернул токен")
             data = json.loads(json_line.decode().strip())
             account_hash = data.get("account_hash")
             if not account_hash:
-                raise Exception("Токен не получен")
+                raise KeyError("Токен не получен")
 
             os.makedirs(os.path.dirname(TOKEN_FILE_PATH), exist_ok=True)
             with open(TOKEN_FILE_PATH, "w") as f:
@@ -92,23 +103,36 @@ class RegistrationApp:
             self.root.after(
                 0, self.on_success, data.get("nickname", nickname), account_hash
             )
-        except Exception as e:
+        except asyncio.CancelledError:
+            return
+        except (
+            ConnectionError,
+            OSError,
+            asyncio.IncompleteReadError,
+            json.JSONDecodeError,
+            KeyError,
+        ) as e:
             logger.exception("Ошибка регистрации")
             self.root.after(0, self.on_error, str(e))
         finally:
-            writer.close()
-            await writer.wait_closed()
+            if writer:
+                writer.close()
+                await writer.wait_closed()
 
     def on_success(self, nickname, token):
+        """Вызывается при успешной регистрации. Показывает сообщение и закрывает окно."""
+
         self.status_label.config(text="Регистрация успешна!", foreground="green")
         messagebox.showinfo(
             "Успех",
             f"Вы зарегистрированы как {nickname}\nТокен сохранён в {TOKEN_FILE_PATH}",
         )
         self.register_btn.config(state="normal")
-        self.root.after(2000, self.root.destroy)
+        self.root.after(CLOSE_AFTER_SUCCESS_MS, self.root.destroy)
 
     def on_error(self, error_msg):
+        """Вызывается при ошибке регистрации. Показывает сообщение об ошибке."""
+
         self.status_label.config(text="Ошибка", foreground="red")
         messagebox.showerror("Ошибка", f"Не удалось зарегистрироваться:\n{error_msg}")
         self.register_btn.config(state="normal")

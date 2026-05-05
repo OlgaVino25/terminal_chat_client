@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 watchdog_logger = logging.getLogger("watchdog")
 watchdog_logger.setLevel(logging.DEBUG)
 
+RECONNECT_DELAY = 3
+IDLE_WATCHDOG_INTERVAL = 5
+IDLE_TIMEOUT = 10
 PING_INTERVAL = 30
 
 
@@ -113,9 +116,10 @@ async def create_authorized_connection(host, port, token, watchdog_queue):
             raise InvalidToken("Неверный токен")
         watchdog_queue.put_nowait(("Connection is alive. Authorization done",))
         return reader, writer, user_data
-    except Exception:
-        writer.close()
-        await writer.wait_closed()
+    except Exception as e:
+        if not isinstance(e, asyncio.CancelledError):
+            writer.close()
+            await writer.wait_closed()
         raise
 
 
@@ -194,6 +198,8 @@ async def process_sending_task(
         except (ConnectionError, OSError, asyncio.IncompleteReadError) as e:
             logger.error(f"Сетевая ошибка при отправке: {e}")
             status_updates_queue.put_nowait(SendingConnectionStateChanged.CLOSED)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.exception(f"Неожиданная ошибка при отправке: {e}")
             status_updates_queue.put_nowait(SendingConnectionStateChanged.CLOSED)
@@ -271,11 +277,11 @@ async def handle_connection(
                 async def idle_watchdog():
                     nonlocal last_message_time
                     while True:
-                        await anyio.sleep(5)
+                        await anyio.sleep(IDLE_WATCHDOG_INTERVAL)
                         idle_seconds = (
                             datetime.datetime.now() - last_message_time
                         ).total_seconds()
-                        if idle_seconds > 10:
+                        if idle_seconds > IDLE_TIMEOUT:
                             watchdog_queue.put_nowait(
                                 ("Connection lost: idle timeout",)
                             )
@@ -313,12 +319,12 @@ async def handle_connection(
         ) as e:
             logger.error(f"Сетевая ошибка в handle_connection: {e}")
             status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
-            await asyncio.sleep(3)
+            await asyncio.sleep(RECONNECT_DELAY)
 
         except anyio.ExceptionGroup as eg:
             logger.error(f"ExceptionGroup в handle_connection: {eg}")
             status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
-            await asyncio.sleep(3)
+            await asyncio.sleep(RECONNECT_DELAY)
 
         except asyncio.CancelledError:
             break

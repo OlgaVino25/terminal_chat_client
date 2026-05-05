@@ -6,6 +6,10 @@ from enum import Enum
 import anyio
 
 
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 600
+
+
 class TkAppClosed(Exception):
     pass
 
@@ -118,6 +122,9 @@ async def draw(messages_queue, sending_queue, status_updates_queue):
     root = tk.Tk()
 
     root.title("Чат")
+
+    root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
+    root.eval("tk::PlaceWindow . center")
 
     root_frame = tk.Frame()
     root_frame.pack(fill="both", expand=True)
