@@ -371,7 +371,7 @@ async def main():
     status_updates_queue.put_nowait(NicknameReceived(nickname))
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(draw, messages_queue, sending_queue, status_updates_queue),
+        tg.start_soon(draw, messages_queue, sending_queue, status_updates_queue)
         tg.start_soon(
             handle_connection,
             args,
@@ -380,8 +380,8 @@ async def main():
             save_queue,
             status_updates_queue,
             watchdog_queue,
-        ),
-        tg.start_soon(save_messages_task, args.history, save_queue),
+        )
+        tg.start_soon(save_messages_task, args.history, save_queue)
         tg.start_soon(
             process_sending_task,
             sending_queue,
@@ -390,8 +390,8 @@ async def main():
             token,
             status_updates_queue,
             watchdog_queue,
-        ),
-        tg.start_soon(watchdog_task, watchdog_queue),
+        )
+        tg.start_soon(watchdog_task, watchdog_queue)
 
 
 if __name__ == "__main__":
