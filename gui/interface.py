@@ -40,13 +40,19 @@ def process_new_message(input_field, sending_queue):
 
 
 async def update_tk(root_frame, interval=1 / 120):
-    while True:
-        try:
-            root_frame.update()
-        except tk.TclError:
-            # if application has been destroyed/closed
-            raise TkAppClosed()
-        await asyncio.sleep(interval)
+    root = root_frame.winfo_toplevel()
+
+    try:
+        while True:
+            try:
+                if not root.winfo_exists():
+                    raise TkAppClosed()
+                root_frame.update()
+            except tk.TclError:
+                raise TkAppClosed()
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        raise
 
 
 async def update_conversation_history(panel, messages_queue):
