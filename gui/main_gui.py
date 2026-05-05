@@ -284,7 +284,6 @@ async def handle_connection(
                             )
                             tg.cancel_scope.cancel()
 
-
                 async def ping_task():
                     """Регулярно отправляет пустые сообщения (ping) для поддержания соединения."""
 
@@ -306,7 +305,12 @@ async def handle_connection(
 
             break
 
-        except (ConnectionError, OSError, asyncio.IncompleteReadError, socket.gaierror) as e:
+        except (
+            ConnectionError,
+            OSError,
+            asyncio.IncompleteReadError,
+            socket.gaierror,
+        ) as e:
             logger.error(f"Сетевая ошибка в handle_connection: {e}")
             status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
             await asyncio.sleep(3)
@@ -366,9 +370,10 @@ async def main():
 
     status_updates_queue.put_nowait(NicknameReceived(nickname))
 
-    await asyncio.gather(
-        draw(messages_queue, sending_queue, status_updates_queue),
-        handle_connection(
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(draw, messages_queue, sending_queue, status_updates_queue),
+        tg.start_soon(
+            handle_connection,
             args,
             token,
             messages_queue,
@@ -376,8 +381,9 @@ async def main():
             status_updates_queue,
             watchdog_queue,
         ),
-        save_messages_task(args.history, save_queue),
-        process_sending_task(
+        tg.start_soon(save_messages_task, args.history, save_queue),
+        tg.start_soon(
+            process_sending_task,
             sending_queue,
             args.host,
             args.port_send,
@@ -385,8 +391,7 @@ async def main():
             status_updates_queue,
             watchdog_queue,
         ),
-        watchdog_task(watchdog_queue),
-    )
+        tg.start_soon(watchdog_task, watchdog_queue),
 
 
 if __name__ == "__main__":
