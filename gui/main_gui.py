@@ -4,8 +4,10 @@ import logging
 import os
 import tkinter as tk
 from tkinter import messagebox
+import socket
 
 import aiofiles
+import anyio
 import async_timeout
 import configargparse
 
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 watchdog_logger = logging.getLogger("watchdog")
 watchdog_logger.setLevel(logging.DEBUG)
+
+PING_INTERVAL = 30
 
 
 class InvalidToken(Exception):
@@ -159,53 +163,6 @@ def load_history(filepath):
     return history
 
 
-async def read_messages_task(
-    host, port, messages_queue, save_queue, status_updates_queue, watchdog_queue
-):
-    status_updates_queue.put_nowait(ReadConnectionStateChanged.INITIATED)
-    while True:
-        try:
-            reader, writer = await connect(host, port)
-            logger.debug(f"Установлено чтение: {host}:{port}")
-            status_updates_queue.put_nowait(ReadConnectionStateChanged.ESTABLISHED)
-            watchdog_queue.put_nowait(
-                ("Connection is alive. Connection established for reading",)
-            )
-            while True:
-                try:
-                    async with async_timeout.timeout(1.0):
-                        line = await reader.readline()
-                    if not line:
-                        break
-                    raw_message = line.decode().strip()
-                    timestamp = datetime.datetime.now().strftime("[%y.%m.%d %H:%M]")
-                    formatted = f"{timestamp} {raw_message}"
-                    await messages_queue.put(formatted)
-                    await save_queue.put(formatted)
-                    watchdog_queue.put_nowait(
-                        ("Connection is alive. New message in chat",)
-                    )
-                except TimeoutError:
-                    watchdog_queue.put_nowait(("1s timeout is elapsed",))
-                except asyncio.CancelledError:
-                    return
-            status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
-            logger.warning(
-                "Чтение: потеряно соединение, переподключение через 3 сек..."
-            )
-            await asyncio.sleep(3)
-        except (ConnectionError, OSError, asyncio.IncompleteReadError) as e:
-            logger.error(f"Ошибка чтения: {e}")
-            status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
-            await asyncio.sleep(3)
-        except asyncio.CancelledError:
-            return
-        finally:
-            if "writer" in locals():
-                writer.close()
-                await writer.wait_closed()
-
-
 async def process_sending_task(
     sending_queue, host, port, token, status_updates_queue, watchdog_queue
 ):
@@ -259,6 +216,115 @@ async def watchdog_task(watchdog_queue):
         watchdog_logger.info(f"[{timestamp}] {message}")
 
 
+async def handle_connection(
+    args, token, messages_queue, save_queue, status_updates_queue, watchdog_queue
+):
+    """Управляет соединением для чтения. Переподключается при обрыве или долгом простое.
+    Использует anyio.create_task_group для запуска reader, idle_watchdog и ping_task.
+    """
+
+    while True:
+        try:
+            reader, writer = await connect(args.host, args.port_read)
+            logger.debug(f"Установлено чтение: {args.host}:{args.port_read}")
+            status_updates_queue.put_nowait(ReadConnectionStateChanged.ESTABLISHED)
+            watchdog_queue.put_nowait(
+                ("Connection is alive. Connection established for reading",)
+            )
+
+            last_message_time = datetime.datetime.now()
+
+            async with anyio.create_task_group() as tg:
+
+                async def reader_task():
+                    nonlocal last_message_time
+                    try:
+                        while True:
+                            try:
+                                async with async_timeout.timeout(1.0):
+                                    line = await reader.readline()
+                                if not line:
+                                    break
+
+                                last_message_time = datetime.datetime.now()
+                                raw_message = line.decode().strip()
+                                timestamp = last_message_time.strftime(
+                                    "[%y.%m.%d %H:%M]"
+                                )
+                                formatted = f"{timestamp} {raw_message}"
+                                await messages_queue.put(formatted)
+                                await save_queue.put(formatted)
+                                watchdog_queue.put_nowait(
+                                    ("Connection is alive. New message in chat",)
+                                )
+                            except TimeoutError:
+                                watchdog_queue.put_nowait(("1s timeout is elapsed",))
+                    except (ConnectionError, OSError, asyncio.IncompleteReadError) as e:
+                        logger.error(f"Ошибка чтения: {e}")
+                        tg.cancel_scope.cancel()
+                    except asyncio.CancelledError:
+                        raise
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+
+                async def idle_watchdog():
+                    nonlocal last_message_time
+                    while True:
+                        await anyio.sleep(5)
+                        idle_seconds = (
+                            datetime.datetime.now() - last_message_time
+                        ).total_seconds()
+                        if idle_seconds > 10:
+                            watchdog_queue.put_nowait(
+                                ("Connection lost: idle timeout",)
+                            )
+                            logger.warning(
+                                "Слишком долго нет сообщений, переподключаемся..."
+                            )
+                            tg.cancel_scope.cancel()
+
+
+                async def ping_task():
+                    """Регулярно отправляет пустые сообщения (ping) для поддержания соединения."""
+
+                    while True:
+                        await anyio.sleep(PING_INTERVAL)
+
+                        try:
+                            writer.write(b"\n\n")
+                            await writer.drain()
+                            watchdog_queue.put_nowait(("Ping sent",))
+                            logger.debug("Ping sent")
+                        except (ConnectionError, OSError, BrokenPipeError) as e:
+                            logger.error(f"Ошибка при отправке ping: {e}")
+                            tg.cancel_scope.cancel()
+
+                tg.start_soon(reader_task)
+                tg.start_soon(idle_watchdog)
+                tg.start_soon(ping_task)
+
+            break
+
+        except (ConnectionError, OSError, asyncio.IncompleteReadError, socket.gaierror) as e:
+            logger.error(f"Сетевая ошибка в handle_connection: {e}")
+            status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
+            await asyncio.sleep(3)
+
+        except anyio.ExceptionGroup as eg:
+            logger.error(f"ExceptionGroup в handle_connection: {eg}")
+            status_updates_queue.put_nowait(ReadConnectionStateChanged.CLOSED)
+            await asyncio.sleep(3)
+
+        except asyncio.CancelledError:
+            break
+
+        finally:
+            if "writer" in locals():
+                writer.close()
+                await writer.wait_closed()
+
+
 async def main():
     args = parse_args()
 
@@ -302,9 +368,9 @@ async def main():
 
     await asyncio.gather(
         draw(messages_queue, sending_queue, status_updates_queue),
-        read_messages_task(
-            args.host,
-            args.port_read,
+        handle_connection(
+            args,
+            token,
             messages_queue,
             save_queue,
             status_updates_queue,
